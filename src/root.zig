@@ -100,13 +100,44 @@ fn SubcommandInfo(info: std.builtin.Type.Union) type {
     return @Struct(.auto, null, &field_names, &field_types, &@splat(.{}));
 }
 
+const ShortMap = struct {
+    data: [26 * 2]?[]const u8,
+
+    /// inline so that if map and char are comptime known then so is the return
+    /// value
+    inline fn get(map: ShortMap, char: u8) ?[]const u8 {
+        if (char < 'a') {
+            return null;
+        } else if (char <= 'z') {
+            return map.data[char - 'a'];
+        } else if (char < 'A') {
+            return null;
+        } else if (char <= 'Z') {
+            return map.data[char - 'A' + 26];
+        } else {
+            return null;
+        }
+    }
+
+    fn set(map: *ShortMap, char: u8, val: []const u8) void {
+        if ('a' <= char and char <= 'z') {
+            map.data[char - 'a'] = val;
+        } else if ('A' <= char and char <= 'Z') {
+            map.data[char - 'A' + 26] = val;
+        } else {
+            unreachable; // shorthands must be alphabetic
+        }
+    }
+};
+
 const ArgProps = struct {
-    named: type,
-    positional: type,
+    Named: type,
+    Positional: type,
 
     named_count: comptime_int,
     positional_count: comptime_int,
-    short_map: [256]?[]const u8,
+    short_map: ShortMap,
+    short_count: comptime_int,
 };
 
 fn argProperties(T: type, args_info: Info(T)) ArgProps {
@@ -125,8 +156,8 @@ fn argProperties(T: type, args_info: Info(T)) ArgProps {
     } else {
         const BackingInt = std.math.IntFittingRange(0, names.len -| 1);
         return .{
-            .named = enum {},
-            .positional = @Enum(
+            .Named = enum {},
+            .Positional = @Enum(
                 BackingInt,
                 .exhaustive,
                 &names,
@@ -136,16 +167,19 @@ fn argProperties(T: type, args_info: Info(T)) ArgProps {
             .named_count = 0,
             .positional_count = names.len,
             .short_map = undefined,
+            .short_count = 0,
         };
     };
 
-    var short_names: [256]?[]const u8 = @splat(null);
+    var short_names: ShortMap = .{ .data = @splat(null) };
+    var short_count: u8 = 0;
 
     for (info.fields[i..], names[i..]) |t, *name| {
         name.* = t.name;
 
         if (@field(args_info, t.name).short) |short_name| {
-            short_names[short_name] = t.name;
+            short_names.set(short_name, t.name);
+            short_count += 1;
         }
     }
 
@@ -153,13 +187,13 @@ fn argProperties(T: type, args_info: Info(T)) ArgProps {
     const PosBacking = std.math.IntFittingRange(0, i -| 2);
 
     return .{
-        .named = @Enum(
+        .Named = @Enum(
             NamedBacking,
             .exhaustive,
             names[i..],
             &std.simd.iota(NamedBacking, names.len - i),
         ),
-        .positional = @Enum(
+        .Positional = @Enum(
             PosBacking,
             .exhaustive,
             names[0 .. i - 1],
@@ -169,6 +203,7 @@ fn argProperties(T: type, args_info: Info(T)) ArgProps {
         .named_count = names.len - i,
         .positional_count = i - 1,
         .short_map = short_names,
+        .short_count = short_count,
     };
 }
 
@@ -183,10 +218,6 @@ pub fn Info(T: type) type {
             parser: ParseFn(T),
         },
     };
-}
-
-fn parseu8(c: []const u8) ParseError!u8 {
-    return if (c.len == 0) 0 else c[0];
 }
 
 inline fn getDefault(ArgType: type, T: type, field_name: []const u8) ?T {
@@ -242,20 +273,38 @@ pub fn parseIterator(
         return try info.parser(gpa, arg);
     }
 
+    const properties = argProperties(ArgsType, info);
+
     var result: ArgsType = undefined;
+
+    comptime var positional_on_default: bool = false;
+    comptime var on_named: bool = false;
+    comptime var named_set_init: std.EnumSet(properties.Named) = .initEmpty();
+
     inline for (@typeInfo(ArgsType).@"struct".fields) |field| {
-        if (field.defaultValue()) |val| {
+        if (comptime std.mem.eql(u8, field.name, "--")) {
+            on_named = true;
+        } else if (comptime field.defaultValue()) |val| {
+            if (!on_named) {
+                positional_on_default = true;
+            }
             @field(result, field.name) = val;
+        } else if (on_named) {
+            comptime named_set_init.insert(@field(properties.Named, field.name));
+        } else if (positional_on_default) {
+            comptime unreachable; // positionals without defaults cannot come after positionals with defaults
         }
     }
 
-    const properties = argProperties(ArgsType, info);
+    var named_set = named_set_init;
 
     var pos: usize = 0;
     while (args.next()) |arg| {
-        if (properties.named_count != 0 and arg.len > 2 and std.mem.startsWith(u8, arg, "--")) {
-            const named = std.meta.stringToEnum(properties.named, arg) orelse
+        if (properties.named_count > 0 and arg.len > 2 and std.mem.startsWith(u8, arg, "--")) {
+            const named = std.meta.stringToEnum(properties.Named, arg[2..]) orelse
                 return error.UnknownArgument;
+
+            named_set.remove(named);
 
             switch (named) {
                 inline else => |e| {
@@ -273,17 +322,19 @@ pub fn parseIterator(
             continue;
         }
 
-        if (properties.named_count != 0 and arg.len == 2 and std.mem.startsWith(u8, arg, "-")) {
+        if (std.mem.eql(u8, arg, "--")) break;
+
+        if (properties.short_count > 0 and std.mem.startsWith(u8, arg, "-")) {
             for (arg[1 .. arg.len - 1]) |short| {
-                const named_str = properties.short_map[short] orelse
+                const named_str = properties.short_map.get(short) orelse
                     return error.UnknownArgument;
 
-                const named = std.meta.stringToEnum(properties.named, named_str).?;
+                const named = std.meta.stringToEnum(properties.Named, named_str).?;
 
                 switch (named) {
                     inline else => |e| {
                         if (@FieldType(ArgsType, @tagName(e)) != bool) {
-                            unreachable;
+                            return error.MissingArgument;
                         }
 
                         @field(result, @tagName(e)) =
@@ -292,16 +343,23 @@ pub fn parseIterator(
                 }
             }
 
-            const named_str = properties.short_map[arg[arg.len - 1]] orelse
+            const named_str = properties.short_map.get(arg[arg.len - 1]) orelse
                 return error.UnknownArgument;
-            const named = std.meta.stringToEnum(properties.named, named_str).?;
+            const named = std.meta.stringToEnum(properties.Named, named_str).?;
+
+            named_set.remove(named);
 
             switch (named) {
                 inline else => |e| {
-                    const next = args.next() orelse return error.MissingArgument;
+                    if (@FieldType(ArgsType, @tagName(e)) == bool) {
+                        @field(result, @tagName(e)) =
+                            !(getDefault(ArgsType, bool, @tagName(e)) orelse comptime unreachable);
+                    } else {
+                        const next = args.next() orelse return error.MissingArgument;
 
-                    const parseFn = @field(info, @tagName(e)).parser;
-                    @field(result, @tagName(e)) = try parseFn(gpa, next);
+                        const parseFn = @field(info, @tagName(e)).parser;
+                        @field(result, @tagName(e)) = try parseFn(gpa, next);
+                    }
                 },
             }
             continue;
@@ -320,6 +378,11 @@ pub fn parseIterator(
 
         pos += 1;
     }
+
+    if (named_set.count() > 0) {
+        return error.UnsetArguments;
+    }
+
     return result;
 }
 
@@ -344,65 +407,41 @@ pub fn parse(
     return result;
 }
 
-// const Args = struct {
-//     pos1: []const u8,
-//     pos2: u8 = 30,
-
-//     @"--": void,
-
-//     named1: u8 = 20,
-//     named2: u8 = 10,
-
-//     pub const info: Info(Args) = .{
-//         .named1 = .{
-//             .description = "This is named arg 1",
-//             .short = 'n',
-//         },
-//         .named2 = .{
-//             .description = "This is named arg 2",
-//         },
-
-//         .pos1 = .{
-//             .description = "This is pos arg 1",
-//         },
-//         .pos2 = .{
-//             .description = "This is pos arg 2",
-//         },
-//     };
-// };
-
-const Args = union(enum) {
-    hi: struct {
-        val: u8,
-        @"--": void,
-        other: bool = false,
-        named2: u8 = 10,
-    },
-    bye: u8,
-
-    pub const info: Info(Args) = .{
-        .hi = .{
-            .val = .{
-                .description = "cool value",
-            },
-            .other = .{
-                .description = "named",
-            },
-            .named2 = .{
-                .description = "named",
-            },
-        },
-        .bye = .{},
-    };
-};
-
 test Info {
+    const Args = union(enum) {
+        hi: struct {
+            val: u8,
+            @"--": void,
+            other: bool = false,
+            named2: u8 = 10,
+        },
+        bye: u8,
+
+        // not sure why i can't put Args intead of @This() here
+        // probably because we aren't in a comptime scope
+        pub const info: Info(@This()) = .{
+            .hi = .{
+                .val = .{
+                    .description = "cool value",
+                },
+                .other = .{
+                    .description = "named",
+                },
+                .named2 = .{
+                    .description = "named",
+                    .short = 'n',
+                },
+            },
+            .bye = .{},
+        };
+    };
+
     if (os == .windows or os == .wasi) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
 
     const args: std.process.Args = .{
-        .vector = &.{ "exe", "hi", "10" },
+        .vector = &.{ "exe", "hi", "10", "--other", "-n", "20" },
     };
 
     const result: Args = try parse(
@@ -413,6 +452,8 @@ test Info {
         .{},
     );
     try std.testing.expectEqual(10, result.hi.val);
+    try std.testing.expect(result.hi.other);
+    try std.testing.expectEqual(20, result.hi.named2);
 }
 
 const std = @import("std");
