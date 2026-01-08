@@ -254,7 +254,7 @@ pub fn parseIterator(
     ArgsType: type,
     info: Info(ArgsType),
     args: *std.process.Args.Iterator,
-    default: ?ArgsType,
+    comptime default: ?ArgsType,
 ) !ArgsType {
     if (@typeInfo(ArgsType) == .@"union") {
         const arg = args.next() orelse "";
@@ -412,8 +412,11 @@ pub fn parse(
 
     const result = try parseIterator(ArgsType, info, &it, null);
 
-    if (options.out_remaining) |ptr| if (os != .windows and os != .wasi) {
-        ptr.* = it.inner.remaining;
+    if (options.out_remaining) |ptr| ptr.* = switch (os) {
+        .windows => it.inner.cmd_line[it.inner.index..], // unknown if this works lol
+        .wasi => if (builtin.link_libc) it.inner.remaining,
+        .freestanding, .other => {},
+        else => it.inner.remaining,
     };
 
     return result;
@@ -474,4 +477,5 @@ test parse {
 
 const std = @import("std");
 
-const os = @import("builtin").os.tag;
+const builtin = @import("builtin");
+const os = builtin.os.tag;
