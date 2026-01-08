@@ -1,0 +1,421 @@
+const ParseError = std.fmt.ParseIntError ||
+    Allocator.Error;
+
+fn ParseFn(T: type) type {
+    return fn (Allocator, []const u8) ParseError!T;
+}
+
+fn parseBool(_: Allocator, _: []const u8) noreturn {
+    @panic("TODO");
+}
+
+fn parseStr(_: Allocator, str: []const u8) ![]const u8 {
+    return str;
+}
+
+fn defaultParser(T: type) ?ParseFn(T) {
+    return switch (@typeInfo(T)) {
+        .int => struct {
+            pub fn parser(_: Allocator, str: []const u8) std.fmt.ParseIntError!T {
+                return std.fmt.parseInt(T, str, 10);
+            }
+        }.parser,
+
+        .pointer => if (T == []const u8)
+            parseStr
+        else
+            null,
+
+        .bool => parseBool,
+        else => null,
+    };
+}
+
+fn ArgInfo(info: std.builtin.Type.Struct) type {
+    var split: usize = 0;
+    var field_names: [info.fields.len][]const u8 = undefined;
+    var field_types: [info.fields.len]type = undefined;
+
+    for (info.fields, &field_names, &field_types, 0..) |t, *name, *ftype, i| {
+        if (std.mem.eql(u8, t.name, "--")) {
+            split = i;
+            break;
+        }
+
+        name.* = t.name;
+        ftype.* = if (defaultParser(t.type)) |default_parser| struct {
+            description: []const u8,
+            parser: ParseFn(t.type) = default_parser,
+
+            pub const is_named = false;
+        } else struct {
+            description: []const u8,
+            parser: ParseFn(t.type),
+
+            pub const is_named = false;
+        };
+    } else {
+        return @Struct(.auto, null, &field_names, &field_types, &@splat(.{}));
+    }
+
+    for (
+        info.fields[split + 1 ..],
+        field_names[split .. field_names.len - 1],
+        field_types[split .. field_types.len - 1],
+    ) |t, *name, *ftype| {
+        name.* = t.name;
+        ftype.* = if (defaultParser(t.type)) |default_parser| struct {
+            description: []const u8,
+            short: ?u8 = null,
+            parser: ParseFn(t.type) = default_parser,
+
+            pub const is_named = true;
+        } else struct {
+            description: []const u8,
+            short: ?u8 = null,
+            parser: ParseFn(t.type),
+
+            pub const is_named = true;
+        };
+    }
+
+    return @Struct(
+        .auto,
+        null,
+        field_names[0 .. field_names.len - 1],
+        field_types[0 .. field_types.len - 1],
+        &@splat(.{}),
+    );
+}
+
+fn SubcommandInfo(info: std.builtin.Type.Union) type {
+    var field_names: [info.fields.len][]const u8 = undefined;
+    var field_types: [info.fields.len]type = undefined;
+
+    for (info.fields, &field_names, &field_types) |t, *name, *ftype| {
+        name.* = t.name;
+        ftype.* = Info(t.type);
+    }
+
+    return @Struct(.auto, null, &field_names, &field_types, &@splat(.{}));
+}
+
+const ArgProps = struct {
+    named: type,
+    positional: type,
+
+    named_count: comptime_int,
+    positional_count: comptime_int,
+    short_map: [256]?[]const u8,
+};
+
+fn argProperties(T: type, args_info: Info(T)) ArgProps {
+    const info = @typeInfo(T).@"struct";
+    var names: [info.fields.len][]const u8 = undefined;
+
+    const i = for (
+        info.fields,
+        &names,
+        0..,
+    ) |t, *name, i| {
+        if (std.mem.eql(u8, t.name, "--")) {
+            break i + 1;
+        }
+        name.* = t.name;
+    } else {
+        const BackingInt = std.math.IntFittingRange(0, names.len -| 1);
+        return .{
+            .named = enum {},
+            .positional = @Enum(
+                BackingInt,
+                .exhaustive,
+                &names,
+                &std.simd.iota(BackingInt, names.len),
+            ),
+
+            .named_count = 0,
+            .positional_count = names.len,
+            .short_map = undefined,
+        };
+    };
+
+    var short_names: [256]?[]const u8 = @splat(null);
+
+    for (info.fields[i..], names[i..]) |t, *name| {
+        name.* = t.name;
+
+        if (@field(args_info, t.name).short) |short_name| {
+            short_names[short_name] = t.name;
+        }
+    }
+
+    const NamedBacking = std.math.IntFittingRange(0, names.len - i -| 1);
+    const PosBacking = std.math.IntFittingRange(0, i -| 2);
+
+    return .{
+        .named = @Enum(
+            NamedBacking,
+            .exhaustive,
+            names[i..],
+            &std.simd.iota(NamedBacking, names.len - i),
+        ),
+        .positional = @Enum(
+            PosBacking,
+            .exhaustive,
+            names[0 .. i - 1],
+            &std.simd.iota(PosBacking, i - 1),
+        ),
+
+        .named_count = names.len - i,
+        .positional_count = i - 1,
+        .short_map = short_names,
+    };
+}
+
+pub fn Info(T: type) type {
+    return switch (@typeInfo(T)) {
+        .@"struct" => |s| ArgInfo(s),
+        .@"union" => |u| SubcommandInfo(u),
+
+        else => if (defaultParser(T)) |parser| struct {
+            parser: ParseFn(T) = parser,
+        } else struct {
+            parser: ParseFn(T),
+        },
+    };
+}
+
+fn parseu8(c: []const u8) ParseError!u8 {
+    return if (c.len == 0) 0 else c[0];
+}
+
+inline fn getDefault(ArgType: type, T: type, field_name: []const u8) ?T {
+    comptime {
+        const info = @typeInfo(ArgType);
+        if (info != .@"struct") return null;
+        for (info.@"struct".fields) |field| {
+            if (std.mem.eql(u8, field.name, field_name)) {
+                return field.defaultValue();
+            }
+        }
+    }
+}
+
+pub const ParseOptions = struct {
+    out_remaining: ?*std.process.Args.Vector = null,
+};
+
+pub fn parseIterator(
+    ArgsType: type,
+    info: Info(ArgsType),
+    gpa: Allocator,
+    args: *std.process.Args.Iterator,
+    default: ?ArgsType,
+) !ArgsType {
+    if (@typeInfo(ArgsType) == .@"union") {
+        const arg = args.next() orelse "";
+        const cmd = std.meta.stringToEnum(std.meta.Tag(ArgsType), arg) orelse
+            return if (arg.len == 0)
+                error.NoSubcmdSpecified
+            else
+                error.UnknownSubcmd;
+
+        switch (cmd) {
+            inline else => |e| {
+                const Child = @FieldType(ArgsType, @tagName(e));
+                const cmd_result = try parseIterator(
+                    Child,
+                    @field(info, @tagName(e)),
+                    gpa,
+                    args,
+                    getDefault(ArgsType, Child, @tagName(e)),
+                );
+                return @unionInit(ArgsType, @tagName(e), cmd_result);
+            },
+        }
+        comptime unreachable;
+    }
+
+    if (@typeInfo(ArgsType) != .@"struct") {
+        const arg = args.next() orelse
+            return if (default) |d| d else error.MissingArgument;
+        return try info.parser(gpa, arg);
+    }
+
+    var result: ArgsType = undefined;
+    inline for (@typeInfo(ArgsType).@"struct".fields) |field| {
+        if (field.defaultValue()) |val| {
+            @field(result, field.name) = val;
+        }
+    }
+
+    const properties = argProperties(ArgsType, info);
+
+    var pos: usize = 0;
+    while (args.next()) |arg| {
+        if (properties.named_count != 0 and arg.len > 2 and std.mem.startsWith(u8, arg, "--")) {
+            const named = std.meta.stringToEnum(properties.named, arg) orelse
+                return error.UnknownArgument;
+
+            switch (named) {
+                inline else => |e| {
+                    if (@FieldType(ArgsType, @tagName(e)) == bool) {
+                        @field(result, @tagName(e)) =
+                            !(getDefault(ArgsType, bool, @tagName(e)) orelse comptime unreachable);
+                    } else {
+                        const next = args.next() orelse return error.MissingArgument;
+
+                        const parseFn = @field(info, @tagName(e)).parser;
+                        @field(result, @tagName(e)) = try parseFn(gpa, next);
+                    }
+                },
+            }
+            continue;
+        }
+
+        if (properties.named_count != 0 and arg.len == 2 and std.mem.startsWith(u8, arg, "-")) {
+            for (arg[1 .. arg.len - 1]) |short| {
+                const named_str = properties.short_map[short] orelse
+                    return error.UnknownArgument;
+
+                const named = std.meta.stringToEnum(properties.named, named_str).?;
+
+                switch (named) {
+                    inline else => |e| {
+                        if (@FieldType(ArgsType, @tagName(e)) != bool) {
+                            unreachable;
+                        }
+
+                        @field(result, @tagName(e)) =
+                            !(getDefault(ArgsType, bool, @tagName(e)) orelse comptime unreachable);
+                    },
+                }
+            }
+
+            const named_str = properties.short_map[arg[arg.len - 1]] orelse
+                return error.UnknownArgument;
+            const named = std.meta.stringToEnum(properties.named, named_str).?;
+
+            switch (named) {
+                inline else => |e| {
+                    const next = args.next() orelse return error.MissingArgument;
+
+                    const parseFn = @field(info, @tagName(e)).parser;
+                    @field(result, @tagName(e)) = try parseFn(gpa, next);
+                },
+            }
+            continue;
+        }
+
+        if (pos == properties.positional_count) return error.TooManyArguments;
+
+        switch (pos) {
+            inline 0...properties.positional_count - 1 => |p| {
+                const field_name = @typeInfo(ArgsType).@"struct".fields[p].name;
+                @field(result, field_name) =
+                    try @field(info, field_name).parser(gpa, arg);
+            },
+            else => unreachable,
+        }
+
+        pos += 1;
+    }
+    return result;
+}
+
+pub fn parse(
+    ArgsType: type,
+    info: Info(ArgsType),
+    gpa: Allocator,
+    args: std.process.Args,
+    options: ParseOptions,
+) !ArgsType {
+    var it = try args.iterateAllocator(gpa);
+    defer it.deinit();
+
+    std.debug.assert(it.skip()); // the exe path is always the first arg
+
+    const result = try parseIterator(ArgsType, info, gpa, &it, null);
+
+    if (options.out_remaining) |ptr| if (os != .windows and os != .wasi) {
+        ptr.* = it.inner.remaining;
+    };
+
+    return result;
+}
+
+// const Args = struct {
+//     pos1: []const u8,
+//     pos2: u8 = 30,
+
+//     @"--": void,
+
+//     named1: u8 = 20,
+//     named2: u8 = 10,
+
+//     pub const info: Info(Args) = .{
+//         .named1 = .{
+//             .description = "This is named arg 1",
+//             .short = 'n',
+//         },
+//         .named2 = .{
+//             .description = "This is named arg 2",
+//         },
+
+//         .pos1 = .{
+//             .description = "This is pos arg 1",
+//         },
+//         .pos2 = .{
+//             .description = "This is pos arg 2",
+//         },
+//     };
+// };
+
+const Args = union(enum) {
+    hi: struct {
+        val: u8,
+        @"--": void,
+        other: bool = false,
+        named2: u8 = 10,
+    },
+    bye: u8,
+
+    pub const info: Info(Args) = .{
+        .hi = .{
+            .val = .{
+                .description = "cool value",
+            },
+            .other = .{
+                .description = "named",
+            },
+            .named2 = .{
+                .description = "named",
+            },
+        },
+        .bye = .{},
+    };
+};
+
+test Info {
+    if (os == .windows or os == .wasi) return error.SkipZigTest;
+
+    const gpa = std.testing.allocator;
+
+    const args: std.process.Args = .{
+        .vector = &.{ "exe", "hi", "10" },
+    };
+
+    const result: Args = try parse(
+        Args,
+        Args.info,
+        gpa,
+        args,
+        .{},
+    );
+    try std.testing.expectEqual(10, result.hi.val);
+}
+
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+
+const os = @import("builtin").os.tag;

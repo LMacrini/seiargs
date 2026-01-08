@@ -1,0 +1,7 @@
+.{
+    .name = .args,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.16.0-dev.1976+8e091047b",
+    .paths = .{""},
+    .fingerprint = 0x161b2ea2fa03a12b,
+}
