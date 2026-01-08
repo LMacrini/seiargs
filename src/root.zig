@@ -1,23 +1,31 @@
 const ParseError = std.fmt.ParseIntError ||
-    Allocator.Error;
+    std.fmt.ParseFloatError ||
+    error{
+        FailedToParse,
+    };
 
 fn ParseFn(T: type) type {
-    return fn (Allocator, []const u8) ParseError!T;
+    return fn ([]const u8) ParseError!T;
 }
 
-fn parseBool(_: Allocator, _: []const u8) noreturn {
+fn parseBool(_: []const u8) noreturn {
     @panic("TODO");
 }
 
-fn parseStr(_: Allocator, str: []const u8) ![]const u8 {
+fn parseStr(str: []const u8) ![]const u8 {
     return str;
 }
 
 fn defaultParser(T: type) ?ParseFn(T) {
     return switch (@typeInfo(T)) {
         .int => struct {
-            pub fn parser(_: Allocator, str: []const u8) std.fmt.ParseIntError!T {
+            pub fn parser(str: []const u8) std.fmt.ParseIntError!T {
                 return std.fmt.parseInt(T, str, 10);
+            }
+        }.parser,
+        .float => struct {
+            pub fn parser(str: []const u8) std.fmt.ParseFloatError!T {
+                return std.fmt.parseFloat(T, str);
             }
         }.parser,
 
@@ -27,6 +35,12 @@ fn defaultParser(T: type) ?ParseFn(T) {
             null,
 
         .bool => parseBool,
+        .@"enum" => struct {
+            pub fn parser(str: []const u8) ParseError!T {
+                return std.meta.stringToEnum(T, str) orelse error.FailedToParse;
+            }
+        }.parser,
+
         else => null,
     };
 }
@@ -239,7 +253,6 @@ pub const ParseOptions = struct {
 pub fn parseIterator(
     ArgsType: type,
     info: Info(ArgsType),
-    gpa: Allocator,
     args: *std.process.Args.Iterator,
     default: ?ArgsType,
 ) !ArgsType {
@@ -257,7 +270,6 @@ pub fn parseIterator(
                 const cmd_result = try parseIterator(
                     Child,
                     @field(info, @tagName(e)),
-                    gpa,
                     args,
                     getDefault(ArgsType, Child, @tagName(e)),
                 );
@@ -270,28 +282,28 @@ pub fn parseIterator(
     if (@typeInfo(ArgsType) != .@"struct") {
         const arg = args.next() orelse
             return if (default) |d| d else error.MissingArgument;
-        return try info.parser(gpa, arg);
+        return try info.parser(arg);
     }
 
     const properties = argProperties(ArgsType, info);
 
     var result: ArgsType = undefined;
 
-    comptime var positional_on_default: bool = false;
+    comptime var positional_default_limit: comptime_int = properties.positional_count;
     comptime var on_named: bool = false;
     comptime var named_set_init: std.EnumSet(properties.Named) = .initEmpty();
 
-    inline for (@typeInfo(ArgsType).@"struct".fields) |field| {
+    inline for (@typeInfo(ArgsType).@"struct".fields, 0..) |field, i| {
         if (comptime std.mem.eql(u8, field.name, "--")) {
             on_named = true;
         } else if (comptime field.defaultValue()) |val| {
-            if (!on_named) {
-                positional_on_default = true;
+            if (!on_named and positional_default_limit > i) {
+                positional_default_limit = i;
             }
             @field(result, field.name) = val;
         } else if (on_named) {
             comptime named_set_init.insert(@field(properties.Named, field.name));
-        } else if (positional_on_default) {
+        } else if (positional_default_limit < i) {
             comptime unreachable; // positionals without defaults cannot come after positionals with defaults
         }
     }
@@ -315,7 +327,7 @@ pub fn parseIterator(
                         const next = args.next() orelse return error.MissingArgument;
 
                         const parseFn = @field(info, @tagName(e)).parser;
-                        @field(result, @tagName(e)) = try parseFn(gpa, next);
+                        @field(result, @tagName(e)) = try parseFn(next);
                     }
                 },
             }
@@ -358,7 +370,7 @@ pub fn parseIterator(
                         const next = args.next() orelse return error.MissingArgument;
 
                         const parseFn = @field(info, @tagName(e)).parser;
-                        @field(result, @tagName(e)) = try parseFn(gpa, next);
+                        @field(result, @tagName(e)) = try parseFn(next);
                     }
                 },
             }
@@ -371,7 +383,7 @@ pub fn parseIterator(
             inline 0...properties.positional_count - 1 => |p| {
                 const field_name = @typeInfo(ArgsType).@"struct".fields[p].name;
                 @field(result, field_name) =
-                    try @field(info, field_name).parser(gpa, arg);
+                    try @field(info, field_name).parser(arg);
             },
             else => unreachable,
         }
@@ -379,7 +391,7 @@ pub fn parseIterator(
         pos += 1;
     }
 
-    if (named_set.count() > 0) {
+    if (named_set.count() > 0 or pos < positional_default_limit) {
         return error.UnsetArguments;
     }
 
@@ -389,7 +401,7 @@ pub fn parseIterator(
 pub fn parse(
     ArgsType: type,
     info: Info(ArgsType),
-    gpa: Allocator,
+    gpa: std.mem.Allocator,
     args: std.process.Args,
     options: ParseOptions,
 ) !ArgsType {
@@ -398,7 +410,7 @@ pub fn parse(
 
     std.debug.assert(it.skip()); // the exe path is always the first arg
 
-    const result = try parseIterator(ArgsType, info, gpa, &it, null);
+    const result = try parseIterator(ArgsType, info, &it, null);
 
     if (options.out_remaining) |ptr| if (os != .windows and os != .wasi) {
         ptr.* = it.inner.remaining;
@@ -407,10 +419,11 @@ pub fn parse(
     return result;
 }
 
-test Info {
+test parse {
     const Args = union(enum) {
         hi: struct {
             val: u8,
+            val2: u8,
             @"--": void,
             other: bool = false,
             named2: u8 = 10,
@@ -423,6 +436,9 @@ test Info {
             .hi = .{
                 .val = .{
                     .description = "cool value",
+                },
+                .val2 = .{
+                    .description = "thing",
                 },
                 .other = .{
                     .description = "named",
@@ -441,7 +457,7 @@ test Info {
     const gpa = std.testing.allocator;
 
     const args: std.process.Args = .{
-        .vector = &.{ "exe", "hi", "10", "--other", "-n", "20" },
+        .vector = &.{ "exe", "hi", "10", "--other", "-n", "20", "10" },
     };
 
     const result: Args = try parse(
@@ -457,6 +473,5 @@ test Info {
 }
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 
 const os = @import("builtin").os.tag;
