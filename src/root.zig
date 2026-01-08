@@ -1,6 +1,7 @@
 const ParseError = std.fmt.ParseIntError ||
     std.fmt.ParseFloatError ||
     error{
+        InvalidInput,
         FailedToParse,
     };
 
@@ -8,8 +9,25 @@ fn ParseFn(T: type) type {
     return fn ([]const u8) ParseError!T;
 }
 
-fn parseBool(_: []const u8) noreturn {
-    @panic("TODO");
+fn parseBool(str: []const u8) !bool {
+    const BoolEnum = enum {
+        true,
+        false,
+        yes,
+        no,
+        y,
+        n,
+        @"1",
+        @"0",
+    };
+
+    const as_enum = std.meta.stringToEnum(BoolEnum, str) orelse
+        return error.InvalidInput;
+
+    return switch (as_enum) {
+        .true, .yes, .y, .@"1" => true,
+        .false, .no, .n, .@"0" => false,
+    };
 }
 
 fn parseStr(str: []const u8) ![]const u8 {
