@@ -232,6 +232,8 @@ fn argProperties(T: type, args_info: Info(T)) ArgProps {
     };
 }
 
+/// To get a grasp of what info looks like, it is best to look at the example for
+/// parse or look at an example in the project's README.
 pub fn Info(T: type) type {
     return switch (@typeInfo(T)) {
         .@"struct" => |s| ArgInfo(s),
