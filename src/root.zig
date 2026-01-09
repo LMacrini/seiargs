@@ -1,4 +1,4 @@
-//! view the "parse" function for info
+//! View the "parse" function for info.
 
 pub const ParseArgError = std.fmt.ParseIntError ||
     std.fmt.ParseFloatError ||
