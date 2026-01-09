@@ -79,13 +79,9 @@ fn ArgInfo(info: std.builtin.Type.Struct) type {
         ftype.* = if (defaultParser(t.type)) |default_parser| struct {
             description: []const u8,
             parser: ParseFn(t.type) = default_parser,
-
-            pub const is_named = false;
         } else struct {
             description: []const u8,
             parser: ParseFn(t.type),
-
-            pub const is_named = false;
         };
     } else {
         return @Struct(.auto, null, &field_names, &field_types, &@splat(.{}));
@@ -101,14 +97,10 @@ fn ArgInfo(info: std.builtin.Type.Struct) type {
             description: []const u8,
             short: ?u8 = null,
             parser: ParseFn(t.type) = default_parser,
-
-            pub const is_named = true;
         } else struct {
             description: []const u8,
             short: ?u8 = null,
             parser: ParseFn(t.type),
-
-            pub const is_named = true;
         };
     }
 
