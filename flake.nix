@@ -25,7 +25,10 @@
     devShells = forAllSystems (system: pkgs: {
       default = pkgs.mkShellNoCC {
         packages = [
-          pkgs.caddy
+          (pkgs.writeShellScriptBin "serve" ''
+            ${pkgs.lib.getExe pkgs.caddy} file-server --root ./zig-out/docs/ --listen :8000
+          '')
+
           zig.packages.${system}.nightly
           zls.packages.${system}.zls
         ];
