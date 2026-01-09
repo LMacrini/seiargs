@@ -1,4 +1,4 @@
-const ParseError = std.fmt.ParseIntError ||
+pub const ParseError = std.fmt.ParseIntError ||
     std.fmt.ParseFloatError ||
     error{
         InvalidInput,
@@ -457,24 +457,24 @@ test parse {
 
         // not sure why i can't put Args intead of @This() here
         // probably because we aren't in a comptime scope
-        pub const info: Info(@This()) = .{
-            .hi = .{
-                .val = .{
-                    .description = "cool value",
-                },
-                .val2 = .{
-                    .description = "thing",
-                },
-                .other = .{
-                    .description = "named",
-                },
-                .named2 = .{
-                    .description = "named",
-                    .short = 'n',
-                },
+    };
+    const info: Info(Args) = .{
+        .hi = .{
+            .val = .{
+                .description = "cool value",
             },
-            .bye = .{},
-        };
+            .val2 = .{
+                .description = "thing",
+            },
+            .other = .{
+                .description = "named",
+            },
+            .named2 = .{
+                .description = "named",
+                .short = 'n',
+            },
+        },
+        .bye = .{},
     };
 
     if (os == .windows or os == .wasi) return error.SkipZigTest;
@@ -487,7 +487,7 @@ test parse {
 
     const result: Args = try parse(
         Args,
-        Args.info,
+        info,
         gpa,
         args,
         .{},
