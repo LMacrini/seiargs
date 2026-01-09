@@ -1,3 +1,5 @@
+//! view the "parse" function for info
+
 pub const ParseError = std.fmt.ParseIntError ||
     std.fmt.ParseFloatError ||
     error{
@@ -264,10 +266,15 @@ inline fn getDefault(ArgType: type, T: type, field_name: []const u8) ?T {
 }
 
 pub const ParseOptions = struct {
+    /// We stop parsing if the program encounters "--".
+    /// if you want to use the remaining args after that,
+    /// you can do that by passing an output pointer here.
+    /// Be warned, you may need to do some platform specific
+    /// things if you choose to use this.
     out_remaining: ?*std.process.Args.Vector = null,
 };
 
-pub fn parseIterator(
+fn parseImpl(
     ArgsType: type,
     info: Info(ArgsType),
     args: *std.process.Args.Iterator,
@@ -284,7 +291,7 @@ pub fn parseIterator(
         switch (cmd) {
             inline else => |e| {
                 const Child = @FieldType(ArgsType, @tagName(e));
-                const cmd_result = try parseIterator(
+                const cmd_result = try parseImpl(
                     Child,
                     @field(info, @tagName(e)),
                     args,
@@ -420,6 +427,20 @@ pub fn parseIterator(
     return result;
 }
 
+/// Same as parse, but with a manually provided iterator.
+pub fn parseIterator(
+    ArgsType: type,
+    info: Info(ArgsType),
+    args: *std.process.Args.Iterator,
+) !ArgsType {
+    return try parseImpl(ArgsType, info, args, null);
+}
+
+/// This function parses arguments for you automatically based on a struct/union
+/// type you give it. A union corresponds to a subcommand (one can be empty with @""
+/// if specifying no subcommands is valid) and a struct corresponds to positional
+/// / named arguments. You must also provide info about the args. You may view
+/// the example below.
 pub fn parse(
     ArgsType: type,
     info: Info(ArgsType),
@@ -432,7 +453,7 @@ pub fn parse(
 
     std.debug.assert(it.skip()); // the exe path is always the first arg
 
-    const result = try parseIterator(ArgsType, info, &it, null);
+    const result = try parseIterator(ArgsType, info, &it);
 
     if (options.out_remaining) |ptr| ptr.* = switch (os) {
         .windows => it.inner.cmd_line[it.inner.index..], // unknown if this works lol
@@ -454,10 +475,10 @@ test parse {
             named2: u8 = 10,
         },
         bye: u8,
-
-        // not sure why i can't put Args intead of @This() here
-        // probably because we aren't in a comptime scope
     };
+
+    // in actual code, info can be a decl inside of args, if you want.
+    // you could also make multiple infos for different subcommands.
     const info: Info(Args) = .{
         .hi = .{
             .val = .{
@@ -477,10 +498,14 @@ test parse {
         .bye = .{},
     };
 
-    if (os == .windows or os == .wasi) return error.SkipZigTest;
-
     const gpa = std.testing.allocator;
 
+    // this code does not run on windows or wasi (without libc) due
+    // to std.process.Args.Vector being platform defined.
+    // you are not expected to initialize your args manually like this,
+    // instead you should get them through main with std.process.Init
+    // or std.process.Init.Minimal
+    if (os == .windows or os == .wasi) return error.SkipZigTest;
     const args: std.process.Args = .{
         .vector = &.{ "exe", "hi", "10", "--other", "10", "--named2=20" },
     };
