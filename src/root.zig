@@ -330,7 +330,9 @@ pub fn parseIterator(
     var pos: usize = 0;
     while (args.next()) |arg| {
         if (properties.named_count > 0 and arg.len > 2 and std.mem.startsWith(u8, arg, "--")) {
-            const named = std.meta.stringToEnum(properties.Named, arg[2..]) orelse
+            const eq = std.mem.findScalar(u8, arg, '=');
+
+            const named = std.meta.stringToEnum(properties.Named, arg[2 .. eq orelse arg.len]) orelse
                 return error.UnknownArgument;
 
             named_set.remove(named);
@@ -341,7 +343,10 @@ pub fn parseIterator(
                         @field(result, @tagName(e)) =
                             !(getDefault(ArgsType, bool, @tagName(e)) orelse comptime unreachable);
                     } else {
-                        const next = args.next() orelse return error.MissingArgument;
+                        const next = if (eq) |idx|
+                            arg[idx + 1 ..]
+                        else
+                            args.next() orelse return error.MissingArgument;
 
                         const parseFn = @field(info, @tagName(e)).parser;
                         @field(result, @tagName(e)) = try parseFn(next);
@@ -477,7 +482,7 @@ test parse {
     const gpa = std.testing.allocator;
 
     const args: std.process.Args = .{
-        .vector = &.{ "exe", "hi", "10", "--other", "-n", "20", "10" },
+        .vector = &.{ "exe", "hi", "10", "--other", "10", "--named2=20" },
     };
 
     const result: Args = try parse(
