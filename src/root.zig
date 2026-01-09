@@ -1,13 +1,13 @@
 //! view the "parse" function for info
 
-pub const ParseError = std.fmt.ParseIntError ||
+pub const ParseArgError = std.fmt.ParseIntError ||
     std.fmt.ParseFloatError ||
     error{
         InvalidInput,
     };
 
 fn ParseFn(T: type) type {
-    return fn ([]const u8) ParseError!T;
+    return fn ([]const u8) ParseArgError!T;
 }
 
 fn parseBool(str: []const u8) !bool {
@@ -55,7 +55,7 @@ fn defaultParser(T: type) ?ParseFn(T) {
 
         .bool => parseBool,
         .@"enum" => struct {
-            pub fn parser(str: []const u8) ParseError!T {
+            pub fn parser(str: []const u8) ParseArgError!T {
                 return std.meta.stringToEnum(T, str) orelse error.InvalidInput;
             }
         }.parser,
@@ -265,21 +265,12 @@ inline fn getDefault(ArgType: type, T: type, field_name: []const u8) ?T {
     }
 }
 
-pub const ParseOptions = struct {
-    /// We stop parsing if the program encounters "--".
-    /// if you want to use the remaining args after that,
-    /// you can do that by passing an output pointer here.
-    /// Be warned, you may need to do some platform specific
-    /// things if you choose to use this.
-    out_remaining: ?*std.process.Args.Vector = null,
-};
-
 fn parseImpl(
     ArgsType: type,
     info: Info(ArgsType),
     args: *std.process.Args.Iterator,
     comptime default: ?ArgsType,
-) !ArgsType {
+) ParseError!ArgsType {
     if (@typeInfo(ArgsType) == .@"union") {
         const arg = args.next() orelse "";
         const cmd = std.meta.stringToEnum(std.meta.Tag(ArgsType), arg) orelse
@@ -432,9 +423,27 @@ pub fn parseIterator(
     ArgsType: type,
     info: Info(ArgsType),
     args: *std.process.Args.Iterator,
-) !ArgsType {
+) ParseError!ArgsType {
     return try parseImpl(ArgsType, info, args, null);
 }
+
+pub const ParseError = ParseArgError || error{
+    NoSubcmdSpecified,
+    UnknownSubcmd,
+    UnknownArgument,
+    MissingArgument,
+    TooManyArguments,
+    UnsetArguments,
+};
+
+pub const ParseOptions = struct {
+    /// We stop parsing if the program encounters "--".
+    /// if you want to use the remaining args after that,
+    /// you can do that by passing an output pointer here.
+    /// Be warned, you may need to do some platform specific
+    /// things if you choose to use this.
+    out_remaining: ?*std.process.Args.Vector = null,
+};
 
 /// This function parses arguments for you automatically based on a struct/union
 /// type you give it. A union corresponds to a subcommand (one can be empty with @""
@@ -447,7 +456,7 @@ pub fn parse(
     gpa: std.mem.Allocator,
     args: std.process.Args,
     options: ParseOptions,
-) !ArgsType {
+) ParseError!ArgsType {
     var it = try args.iterateAllocator(gpa);
     defer it.deinit();
 
