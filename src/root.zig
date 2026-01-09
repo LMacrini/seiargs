@@ -2,7 +2,6 @@ const ParseError = std.fmt.ParseIntError ||
     std.fmt.ParseFloatError ||
     error{
         InvalidInput,
-        FailedToParse,
     };
 
 fn ParseFn(T: type) type {
@@ -55,7 +54,7 @@ fn defaultParser(T: type) ?ParseFn(T) {
         .bool => parseBool,
         .@"enum" => struct {
             pub fn parser(str: []const u8) ParseError!T {
-                return std.meta.stringToEnum(T, str) orelse error.FailedToParse;
+                return std.meta.stringToEnum(T, str) orelse error.InvalidInput;
             }
         }.parser,
 
