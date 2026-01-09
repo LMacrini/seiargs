@@ -25,6 +25,7 @@
     devShells = forAllSystems (system: pkgs: {
       default = pkgs.mkShellNoCC {
         packages = [
+          pkgs.caddy
           zig.packages.${system}.nightly
           zls.packages.${system}.zls
         ];
