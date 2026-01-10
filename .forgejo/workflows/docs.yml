@@ -24,7 +24,7 @@ jobs:
         run: nix build .#docs
 
       - name: Deploy Docs
-        uses: https://git.serversmp.xyz/actions/sites-deploy@main
+        uses: https://git.serversmp.xyz/actions/sites-deploy@v1
         with:
           folder: ./result
-          clean: true # Up to you pretty much this decides whether to force push or not
+          clean: true
