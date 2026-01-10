@@ -64,53 +64,55 @@ fn defaultParser(T: type) ?ParseFn(T) {
     };
 }
 
-fn ArgInfo(info: std.builtin.Type.Struct) type {
-    var split: usize = 0;
-    var field_names: [info.fields.len][]const u8 = undefined;
-    var field_types: [info.fields.len]type = undefined;
+fn Named(T: type) type {
+    const info = @typeInfo(T).@"struct";
 
-    for (info.fields, &field_names, &field_types, 0..) |t, *name, *ftype, i| {
-        if (std.mem.eql(u8, t.name, "--")) {
-            split = i;
-            break;
-        }
+    var names: [info.fields.len][]const u8 = undefined;
+    var types: [info.fields.len]type = undefined;
 
-        name.* = t.name;
-        ftype.* = if (defaultParser(t.type)) |default_parser| struct {
-            description: []const u8,
-            parser: ParseFn(t.type) = default_parser,
-        } else struct {
-            description: []const u8,
-            parser: ParseFn(t.type),
-        };
-    } else {
-        return @Struct(.auto, null, &field_names, &field_types, &@splat(.{}));
-    }
-
-    for (
-        info.fields[split + 1 ..],
-        field_names[split .. field_names.len - 1],
-        field_types[split .. field_types.len - 1],
-    ) |t, *name, *ftype| {
-        name.* = t.name;
-        ftype.* = if (defaultParser(t.type)) |default_parser| struct {
-            description: []const u8,
+    for (info.fields, &names, &types) |field, *name, *t| {
+        name.* = field.name;
+        t.* = if (defaultParser(field.type)) |parser| struct {
+            description: ?[]const u8 = null,
             short: ?u8 = null,
-            parser: ParseFn(t.type) = default_parser,
+            parser: ParseFn(field.type) = parser,
         } else struct {
-            description: []const u8,
+            description: ?[]const u8 = null,
             short: ?u8 = null,
-            parser: ParseFn(t.type),
+            parser: ParseFn(field.type),
         };
     }
 
-    return @Struct(
-        .auto,
-        null,
-        field_names[0 .. field_names.len - 1],
-        field_types[0 .. field_types.len - 1],
-        &@splat(.{}),
-    );
+    return @Struct(.auto, null, &names, &types, &@splat(.{}));
+}
+
+fn Positional(T: type) type {
+    const info = @typeInfo(T).@"struct";
+
+    var names: [info.fields.len][]const u8 = undefined;
+    var types: [info.fields.len]type = undefined;
+
+    for (info.fields, &names, &types) |field, *name, *t| {
+        name.* = field.name;
+        t.* = if (defaultParser(field.type)) |parser| struct {
+            description: ?[]const u8 = null,
+            parser: ParseFn(field.type) = parser,
+        } else struct {
+            description: ?[]const u8 = null,
+            parser: ParseFn(field.type),
+        };
+    }
+
+    return @Struct(.auto, null, &names, &types, &@splat(.{}));
+}
+
+fn ArgInfo(T: type, info: std.builtin.Type.Struct) type {
+    std.debug.assert(info.fields.len == 2);
+
+    return struct {
+        named: Named(@FieldType(T, "named")),
+        positional: Positional(@FieldType(T, "positional")),
+    };
 }
 
 fn SubcommandInfo(info: std.builtin.Type.Union) type {
@@ -165,70 +167,39 @@ const ArgProps = struct {
     short_count: comptime_int,
 };
 
-fn argProperties(T: type, args_info: Info(T)) ArgProps {
-    const info = @typeInfo(T).@"struct";
-    var names: [info.fields.len][]const u8 = undefined;
+fn argProperties(T: type, info: Info(T)) ArgProps {
+    const NamedEnum = std.meta.FieldEnum(@FieldType(T, "named"));
+    const PositionalEnum = std.meta.FieldEnum(@FieldType(T, "named"));
 
-    const i = for (
-        info.fields,
-        &names,
-        0..,
-    ) |t, *name, i| {
-        if (std.mem.eql(u8, t.name, "--")) {
-            break i + 1;
+    const named_count = @typeInfo(NamedEnum).@"enum".fields.len;
+    const positional_count = @typeInfo(PositionalEnum).@"enum".fields.len;
+
+    const short_count, const short_map = if (named_count > 0) blk: {
+        var short_count = 0;
+        var short_map: ShortMap = .{ .data = @splat(null) };
+
+        for (@typeInfo(@FieldType(T, "named")).@"struct".fields) |field| {
+            const short = @field(info.named, field.name).short;
+            if (short) |s| {
+                if (short_map.get(s)) |_| {
+                    unreachable; // cannot have duplicate short names
+                }
+                short_map.set(s, field.name);
+                short_count += 1;
+            }
         }
-        name.* = t.name;
-    } else {
-        const BackingInt = std.math.IntFittingRange(0, names.len -| 1);
-        return .{
-            .Named = enum {},
-            .Positional = @Enum(
-                BackingInt,
-                .exhaustive,
-                &names,
-                &std.simd.iota(BackingInt, names.len),
-            ),
 
-            .named_count = 0,
-            .positional_count = names.len,
-            .short_map = undefined,
-            .short_count = 0,
-        };
-    };
-
-    var short_names: ShortMap = .{ .data = @splat(null) };
-    var short_count: u8 = 0;
-
-    for (info.fields[i..], names[i..]) |t, *name| {
-        name.* = t.name;
-
-        if (@field(args_info, t.name).short) |short_name| {
-            short_names.set(short_name, t.name);
-            short_count += 1;
-        }
-    }
-
-    const NamedBacking = std.math.IntFittingRange(0, names.len - i -| 1);
-    const PosBacking = std.math.IntFittingRange(0, i -| 2);
+        break :blk .{ short_count, short_map };
+    } else .{ 0, undefined };
 
     return .{
-        .Named = @Enum(
-            NamedBacking,
-            .exhaustive,
-            names[i..],
-            &std.simd.iota(NamedBacking, names.len - i),
-        ),
-        .Positional = @Enum(
-            PosBacking,
-            .exhaustive,
-            names[0 .. i - 1],
-            &std.simd.iota(PosBacking, i - 1),
-        ),
+        .Named = NamedEnum,
+        .Positional = PositionalEnum,
 
-        .named_count = names.len - i,
-        .positional_count = i - 1,
-        .short_map = short_names,
+        .named_count = named_count,
+        .positional_count = positional_count,
         .short_count = short_count,
+        .short_map = short_map,
     };
 }
 
@@ -236,7 +207,7 @@ fn argProperties(T: type, args_info: Info(T)) ArgProps {
 /// parse or look at an example in the project's README.
 pub fn Info(T: type) type {
     return switch (@typeInfo(T)) {
-        .@"struct" => |s| ArgInfo(s),
+        .@"struct" => |s| ArgInfo(T, s),
         .@"union" => |u| SubcommandInfo(u),
 
         else => if (defaultParser(T)) |parser| struct {
@@ -261,7 +232,7 @@ inline fn getDefault(ArgType: type, T: type, field_name: []const u8) ?T {
 
 fn parseImpl(
     ArgsType: type,
-    info: Info(ArgsType),
+    comptime info: Info(ArgsType),
     args: *std.process.Args.Iterator,
     comptime default: ?ArgsType,
 ) ParseError!ArgsType {
@@ -294,26 +265,32 @@ fn parseImpl(
         return try info.parser(arg);
     }
 
+    const NamedT = @FieldType(ArgsType, "named");
+    const PosT = @FieldType(ArgsType, "positional");
+
     const properties = argProperties(ArgsType, info);
 
     var result: ArgsType = undefined;
 
     comptime var positional_default_limit: comptime_int = properties.positional_count;
-    comptime var on_named: bool = false;
     comptime var named_set_init: std.EnumSet(properties.Named) = .initEmpty();
 
-    inline for (@typeInfo(ArgsType).@"struct".fields, 0..) |field, i| {
-        if (comptime std.mem.eql(u8, field.name, "--")) {
-            on_named = true;
-        } else if (comptime field.defaultValue()) |val| {
-            if (!on_named and positional_default_limit > i) {
+    inline for (@typeInfo(PosT).@"struct".fields, 0..) |field, i| {
+        if (comptime field.defaultValue()) |val| {
+            if (positional_default_limit > i) {
                 positional_default_limit = i;
             }
-            @field(result, field.name) = val;
-        } else if (on_named) {
-            comptime named_set_init.insert(@field(properties.Named, field.name));
+            @field(result.positional, field.name) = val;
         } else if (positional_default_limit < i) {
             comptime unreachable; // positionals without defaults cannot come after positionals with defaults
+        }
+    }
+
+    inline for (@typeInfo(NamedT).@"struct".fields) |field| {
+        if (comptime field.defaultValue()) |val| {
+            @field(result.named, field.name) = val;
+        } else {
+            comptime named_set_init.insert(@field(properties.Named, field.name));
         }
     }
 
@@ -331,17 +308,17 @@ fn parseImpl(
 
             switch (named) {
                 inline else => |e| {
-                    if (@FieldType(ArgsType, @tagName(e)) == bool) {
-                        @field(result, @tagName(e)) =
-                            !(getDefault(ArgsType, bool, @tagName(e)) orelse comptime unreachable);
+                    if (@FieldType(NamedT, @tagName(e)) == bool) {
+                        @field(result.named, @tagName(e)) =
+                            !(getDefault(NamedT, bool, @tagName(e)) orelse comptime unreachable);
                     } else {
                         const next = if (eq) |idx|
                             arg[idx + 1 ..]
                         else
                             args.next() orelse return error.MissingArgument;
 
-                        const parseFn = @field(info, @tagName(e)).parser;
-                        @field(result, @tagName(e)) = try parseFn(next);
+                        const parseFn = @field(info.named, @tagName(e)).parser;
+                        @field(result.named, @tagName(e)) = try parseFn(next);
                     }
                 },
             }
@@ -359,12 +336,12 @@ fn parseImpl(
 
                 switch (named) {
                     inline else => |e| {
-                        if (@FieldType(ArgsType, @tagName(e)) != bool) {
+                        if (@FieldType(NamedT, @tagName(e)) != bool) {
                             return error.MissingArgument;
                         }
 
-                        @field(result, @tagName(e)) =
-                            !(getDefault(ArgsType, bool, @tagName(e)) orelse comptime unreachable);
+                        @field(result.named, @tagName(e)) =
+                            !(getDefault(NamedT, bool, @tagName(e)) orelse comptime unreachable);
                     },
                 }
             }
@@ -377,14 +354,14 @@ fn parseImpl(
 
             switch (named) {
                 inline else => |e| {
-                    if (@FieldType(ArgsType, @tagName(e)) == bool) {
-                        @field(result, @tagName(e)) =
-                            !(getDefault(ArgsType, bool, @tagName(e)) orelse comptime unreachable);
+                    if (@FieldType(NamedT, @tagName(e)) == bool) {
+                        @field(result.named, @tagName(e)) =
+                            !(getDefault(NamedT, bool, @tagName(e)) orelse comptime unreachable);
                     } else {
                         const next = args.next() orelse return error.MissingArgument;
 
-                        const parseFn = @field(info, @tagName(e)).parser;
-                        @field(result, @tagName(e)) = try parseFn(next);
+                        const parseFn = @field(info.named, @tagName(e)).parser;
+                        @field(result.named, @tagName(e)) = try parseFn(next);
                     }
                 },
             }
@@ -395,9 +372,9 @@ fn parseImpl(
 
         switch (pos) {
             inline 0...properties.positional_count - 1 => |p| {
-                const field_name = @typeInfo(ArgsType).@"struct".fields[p].name;
-                @field(result, field_name) =
-                    try @field(info, field_name).parser(arg);
+                const field_name = @typeInfo(PosT).@"struct".fields[p].name;
+                @field(result.positional, field_name) =
+                    try @field(info.positional, field_name).parser(arg);
             },
             else => unreachable,
         }
@@ -415,7 +392,7 @@ fn parseImpl(
 /// Same as parse, but with a manually provided iterator.
 pub fn parseIterator(
     ArgsType: type,
-    info: Info(ArgsType),
+    comptime info: Info(ArgsType),
     args: *std.process.Args.Iterator,
 ) ParseError!ArgsType {
     return try parseImpl(ArgsType, info, args, null);
@@ -446,7 +423,7 @@ pub const ParseOptions = struct {
 /// the example below.
 pub fn parse(
     ArgsType: type,
-    info: Info(ArgsType),
+    comptime info: Info(ArgsType),
     gpa: std.mem.Allocator,
     args: std.process.Args,
     options: ParseOptions,
@@ -471,11 +448,14 @@ pub fn parse(
 test parse {
     const Args = union(enum) {
         hi: struct {
-            val: u8,
-            val2: u8,
-            @"--": void,
-            other: bool = false,
-            named2: u8 = 10,
+            positional: struct {
+                val: u8,
+                val2: u8,
+            },
+            named: struct {
+                other: bool = false,
+                named2: u8 = 10,
+            },
         },
         bye: u8,
     };
@@ -484,18 +464,22 @@ test parse {
     // you could also make multiple infos for different subcommands.
     const info: Info(Args) = .{
         .hi = .{
-            .val = .{
-                .description = "cool value",
+            .positional = .{
+                .val = .{
+                    .description = "cool value",
+                },
+                .val2 = .{
+                    .description = "thing",
+                },
             },
-            .val2 = .{
-                .description = "thing",
-            },
-            .other = .{
-                .description = "named",
-            },
-            .named2 = .{
-                .description = "named",
-                .short = 'n',
+            .named = .{
+                .other = .{
+                    .description = "named",
+                },
+                .named2 = .{
+                    .description = "named",
+                    .short = 'n',
+                },
             },
         },
         .bye = .{},
@@ -520,9 +504,9 @@ test parse {
         args,
         .{},
     );
-    try std.testing.expectEqual(10, result.hi.val);
-    try std.testing.expect(result.hi.other);
-    try std.testing.expectEqual(20, result.hi.named2);
+    try std.testing.expectEqual(10, result.hi.positional.val);
+    try std.testing.expect(result.hi.named.other);
+    try std.testing.expectEqual(20, result.hi.named.named2);
 }
 
 const std = @import("std");
