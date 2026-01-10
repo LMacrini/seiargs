@@ -21,7 +21,10 @@ jobs:
         uses: https://git.serversmp.xyz/actions/magic-nix-cache-action@main
 
       - name: Build Docs
-        run: nix develop .#minimal -- zig build docs
+        run: |
+          nix develop .#minimal
+          zig build docs
+          exit
 
       - name: Deploy Docs
         uses: https://git.serversmp.xyz/actions/sites-deploy@v1
