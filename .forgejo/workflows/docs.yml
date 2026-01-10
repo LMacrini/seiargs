@@ -26,5 +26,5 @@ jobs:
       - name: Deploy Docs
         uses: https://git.serversmp.xyz/actions/sites-deploy@v1
         with:
-          folder: ./result/build
+          folder: ./result
           clean: true
