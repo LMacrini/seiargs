@@ -508,7 +508,7 @@ test parse {
     // you are not expected to initialize your args manually like this,
     // instead you should get them through main with std.process.Init
     // or std.process.Init.Minimal
-    if (os == .windows or os == .wasi) return error.SkipZigTest;
+    if (os == .windows or os == .wasi and !builtin.link_libc) return error.SkipZigTest;
     const args: std.process.Args = .{
         .vector = &.{ "exe", "hi", "10", "--other", "10", "--named2=20" },
     };
