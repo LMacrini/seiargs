@@ -34,6 +34,12 @@
               zls.packages.${system}.zls
             ];
           };
+
+          minimal = pkgs.mkShellNoCC {
+            packages = [
+              zig.packages.${system}.nightly
+            ];
+          };
         }
       );
     };

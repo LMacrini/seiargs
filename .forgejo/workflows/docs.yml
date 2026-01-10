@@ -1,0 +1,33 @@
+name: "Build/Deploy Docs"
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: [ubuntu-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: https://code.forgejo.org/actions/checkout@v4
+
+      - name: Setup Determinate Nix
+        uses: https://git.serversmp.xyz/actions/determinate-nix-action@main
+
+      - name: Setup Magic Nix Cache
+        uses: https://git.serversmp.xyz/actions/magic-nix-cache-action@main
+
+      - name: Nix Shell
+        run: nix develop .#minimal
+
+      - name: Build Docs
+        run: zig build docs
+
+      - name: Deploy Docs
+        uses: https://git.serversmp.xyz/actions/sites-deploy@v1
+        with:
+          folder: ./zig-out/docs
+          clean: true # Up to you pretty much this decides whether to force push or not
