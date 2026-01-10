@@ -42,5 +42,26 @@
           };
         }
       );
+
+      packages = forAllSystems (
+        system: pkgs: {
+          docs = pkgs.stdenvNoCC.mkDerivation {
+            name = "seiargs-docs";
+            src = ./.;
+
+            nativeBuildInputs = [
+              zig.packages.${system}.nightly
+            ];
+
+            buildPhase = ''
+              ZIG_GLOBAL_CACHE_DIR=.zig_cache zig build docs
+            '';
+
+            installPhase = ''
+              cp -r ./zig-out/docs $out
+            '';
+          };
+        }
+      );
     };
 }
