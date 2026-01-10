@@ -20,11 +20,11 @@ jobs:
       - name: Setup Magic Nix Cache
         uses: https://git.serversmp.xyz/actions/magic-nix-cache-action@main
 
+      - name: Install Shell
+        run: nix profile install .#minimal
+
       - name: Build Docs
-        run: |
-          nix develop .#minimal
-          zig build docs
-          exit
+        run: zig build docs
 
       - name: Deploy Docs
         uses: https://git.serversmp.xyz/actions/sites-deploy@v1
