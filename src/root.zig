@@ -276,7 +276,7 @@ fn parseImpl(
     comptime var named_set_init: std.EnumSet(properties.Named) = .initEmpty();
 
     inline for (@typeInfo(PosT).@"struct".fields, 0..) |field, i| {
-        if (comptime field.defaultValue()) |val| {
+        if (field.defaultValue()) |val| {
             if (positional_default_limit > i) {
                 positional_default_limit = i;
             }
@@ -287,7 +287,7 @@ fn parseImpl(
     }
 
     inline for (@typeInfo(NamedT).@"struct".fields) |field| {
-        if (comptime field.defaultValue()) |val| {
+        if (field.defaultValue()) |val| {
             @field(result.named, field.name) = val;
         } else {
             comptime named_set_init.insert(@field(properties.Named, field.name));
