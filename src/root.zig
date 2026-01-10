@@ -436,7 +436,7 @@ pub const ParseOptions = struct {
     /// you can do that by passing an output pointer here.
     /// Be warned, you may need to do some platform specific
     /// things if you choose to use this.
-    out_remaining: ?*std.process.Args.Vector = null,
+    out_remaining: ?*std.process.Args = null,
 };
 
 /// This function parses arguments for you automatically based on a struct/union
@@ -458,7 +458,7 @@ pub fn parse(
 
     const result = try parseIterator(ArgsType, info, &it);
 
-    if (options.out_remaining) |ptr| ptr.* = switch (os) {
+    if (options.out_remaining) |ptr| ptr.vector = switch (os) {
         .windows => it.inner.cmd_line[it.inner.index..], // unknown if this works lol
         .wasi => if (builtin.link_libc) it.inner.remaining,
         .freestanding, .other => {},
