@@ -26,10 +26,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Determinate Nix
-        uses: DeterminateSystems/actions/determinate-nix-action@main
+        uses: DeterminateSystems/determinate-nix-action@main
 
       - name: Setup Magic Nix Cache
-        uses: DeterminateSystems/actions/magic-nix-cache-action@main
+        uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Build Docs
         run: nix build .#docs
