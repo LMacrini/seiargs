@@ -169,7 +169,7 @@ const ArgProps = struct {
 
 fn argProperties(T: type, info: Info(T)) ArgProps {
     const NamedEnum = std.meta.FieldEnum(@FieldType(T, "named"));
-    const PositionalEnum = std.meta.FieldEnum(@FieldType(T, "named"));
+    const PositionalEnum = std.meta.FieldEnum(@FieldType(T, "positional"));
 
     const named_count = @typeInfo(NamedEnum).@"enum".fields.len;
     const positional_count = @typeInfo(PositionalEnum).@"enum".fields.len;
