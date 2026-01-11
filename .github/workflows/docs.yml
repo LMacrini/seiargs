@@ -1,0 +1,50 @@
+name: "Build/Deploy Docs"
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permission: write-all
+
+concurrency:
+  group: "pages"
+  # cancel-in-progress: false
+
+
+jobs:
+  website:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: [ubuntu-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Determinate Nix
+        uses: DeterminateSystems/actions/determinate-nix-action@main
+
+      - name: Setup Magic Nix Cache
+        uses: DeterminateSystems/actions/magic-nix-cache-action@main
+
+      - name: Build Docs
+        run: nix build .#docs
+
+      - name: Create Artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          name: website
+          path: ./result/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: website
