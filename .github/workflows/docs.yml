@@ -6,7 +6,7 @@ on:
       - main
   workflow_dispatch:
 
-permission: write-all
+permissions: write-all
 
 concurrency:
   group: "pages"
