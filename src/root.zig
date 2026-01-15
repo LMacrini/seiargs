@@ -233,7 +233,7 @@ inline fn getDefault(ArgType: type, T: type, field_name: []const u8) ?T {
 fn parseImpl(
     ArgsType: type,
     comptime info: Info(ArgsType),
-    args: *std.process.Args.Iterator,
+    args: *Iter,
     comptime default: ?ArgsType,
 ) ParseError!ArgsType {
     if (@typeInfo(ArgsType) == .@"union") {
@@ -389,15 +389,6 @@ fn parseImpl(
     return result;
 }
 
-/// Same as parse, but with a manually provided iterator.
-pub fn parseIterator(
-    ArgsType: type,
-    comptime info: Info(ArgsType),
-    args: *std.process.Args.Iterator,
-) ParseError!ArgsType {
-    return try parseImpl(ArgsType, info, args, null);
-}
-
 pub const ParseError = ParseArgError || error{
     NoSubcmdSpecified,
     UnknownSubcmd,
@@ -405,6 +396,9 @@ pub const ParseError = ParseArgError || error{
     MissingArgument,
     TooManyArguments,
     UnsetArguments,
+
+    /// an allocator is only called once but it still counts
+    OutOfMemory,
 };
 
 pub const ParseOptions = struct {
@@ -413,7 +407,30 @@ pub const ParseOptions = struct {
     /// you can do that by passing an output pointer here.
     /// Be warned, you may need to do some platform specific
     /// things if you choose to use this.
-    out_remaining: ?*std.process.Args = null,
+    out_remaining: ?*[]const [:0]const u8 = null,
+};
+
+const Iter = struct {
+    args: []const [:0]const u8,
+    idx: usize,
+
+    // unused, maybe useful in the future
+    pub fn prev(iter: Iter) [:0]const u8 {
+        return iter.args[iter.idx - 1];
+    }
+
+    pub fn next(iter: *Iter) ?[:0]const u8 {
+        if (iter.idx == iter.args.len) {
+            return null;
+        }
+
+        defer iter.idx += 1;
+        return iter.args[iter.idx];
+    }
+
+    pub fn rest(iter: Iter) []const [:0]const u8 {
+        return iter.args[iter.idx..];
+    }
 };
 
 /// This function parses arguments for you automatically based on a struct/union
@@ -424,23 +441,17 @@ pub const ParseOptions = struct {
 pub fn parse(
     ArgsType: type,
     comptime info: Info(ArgsType),
-    gpa: std.mem.Allocator,
-    args: std.process.Args,
+    args: []const [:0]const u8,
     options: ParseOptions,
 ) ParseError!ArgsType {
-    var it = try args.iterateAllocator(gpa);
-    defer it.deinit();
-
-    std.debug.assert(it.skip()); // the exe path is always the first arg
-
-    const result = try parseIterator(ArgsType, info, &it);
-
-    if (options.out_remaining) |ptr| ptr.vector = switch (os) {
-        .windows => it.inner.cmd_line[it.inner.index..], // unknown if this works lol
-        .wasi => if (builtin.link_libc) it.inner.remaining,
-        .freestanding, .other => {},
-        else => it.inner.remaining,
+    var iter: Iter = .{
+        .args = args,
+        .idx = 1,
     };
+
+    const result = try parseImpl(ArgsType, info, &iter, null);
+
+    if (options.out_remaining) |ptr| ptr.* = iter.rest();
 
     return result;
 }
@@ -485,22 +496,11 @@ test parse {
         .bye = .{},
     };
 
-    const gpa = std.testing.allocator;
-
-    // this code does not run on windows or wasi (without libc) due
-    // to std.process.Args.Vector being platform defined.
-    // you are not expected to initialize your args manually like this,
-    // instead you should get them through main with std.process.Init
-    // or std.process.Init.Minimal
-    if (os == .windows or os == .wasi and !builtin.link_libc) return error.SkipZigTest;
-    const args: std.process.Args = .{
-        .vector = &.{ "exe", "hi", "10", "--other", "10", "--named2=20" },
-    };
+    const args: []const [:0]const u8 = &.{ "exe", "hi", "10", "--other", "10", "--named2=20" };
 
     const result: Args = try parse(
         Args,
         info,
-        gpa,
         args,
         .{},
     );
