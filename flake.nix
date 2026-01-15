@@ -25,6 +25,10 @@
       devShells = forAllSystems (
         system: pkgs: {
           default = pkgs.mkShellNoCC {
+            name = "seiargs";
+
+            ZIG_BUILD_ERROR_STYLE = "verbose_clear";
+
             packages = [
               (pkgs.writeShellScriptBin "serve" ''
                 ${pkgs.lib.getExe pkgs.caddy} file-server --root ./zig-out/docs/ --listen :8080
