@@ -496,6 +496,7 @@ test parse {
         .bye = .{},
     };
 
+    // in real code, get this via toSlice on std.process.Args
     const args: []const [:0]const u8 = &.{ "exe", "hi", "10", "--other", "10", "--named2=20" };
 
     const result: Args = try parse(
