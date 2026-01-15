@@ -71,6 +71,10 @@ fn Named(T: type) type {
     var types: [info.fields.len]type = undefined;
 
     for (info.fields, &names, &types) |field, *name, *t| {
+        std.debug.assert(field.name.len != 0);
+        std.debug.assert(field.name[0] != '-');
+        std.debug.assert(std.mem.findScalar(u8, field.name, '=') == null);
+
         name.* = field.name;
         t.* = if (defaultParser(field.type)) |parser| struct {
             description: ?[]const u8 = null,
