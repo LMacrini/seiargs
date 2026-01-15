@@ -400,9 +400,6 @@ pub const ParseError = ParseArgError || error{
     MissingArgument,
     TooManyArguments,
     UnsetArguments,
-
-    /// an allocator is only called once but it still counts
-    OutOfMemory,
 };
 
 pub const ParseOptions = struct {
