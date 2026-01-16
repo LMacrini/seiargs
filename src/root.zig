@@ -74,9 +74,14 @@ fn Named(T: type) type {
         std.debug.assert(field.name.len != 0);
         std.debug.assert(field.name[0] != '-');
         std.debug.assert(std.mem.findScalar(u8, field.name, '=') == null);
+        std.debug.assert(!std.mem.startsWith(u8, field.name, "no-"));
 
         name.* = field.name;
-        t.* = if (defaultParser(field.type)) |parser| struct {
+        t.* = if (field.type == bool) struct {
+            description: ?[]const u8 = null,
+            short: ?u8 = null,
+            parser: ?ParseFn(bool) = null,
+        } else if (defaultParser(field.type)) |parser| struct {
             description: ?[]const u8 = null,
             short: ?u8 = null,
             parser: ParseFn(field.type) = parser,
@@ -305,7 +310,13 @@ fn parseImpl(
         if (properties.named_count > 0 and arg.len > 2 and std.mem.startsWith(u8, arg, "--")) {
             const eq = std.mem.findScalar(u8, arg, '=');
 
-            const named = std.meta.stringToEnum(properties.Named, arg[2 .. eq orelse arg.len]) orelse
+            const negates = std.mem.startsWith(u8, arg[2..], "no-");
+            const name = if (negates)
+                arg[5 .. eq orelse arg.len]
+            else
+                arg[2 .. eq orelse arg.len];
+
+            const named = std.meta.stringToEnum(properties.Named, name) orelse
                 return error.UnknownArgument;
 
             named_set.remove(named);
@@ -313,8 +324,18 @@ fn parseImpl(
             switch (named) {
                 inline else => |e| {
                     if (@FieldType(NamedT, @tagName(e)) == bool) {
-                        @field(result.named, @tagName(e)) =
-                            !(getDefault(NamedT, bool, @tagName(e)) orelse comptime unreachable);
+                        if (@field(info.named, @tagName(e)).parser) |parseFn| {
+                            const next = if (eq) |idx|
+                                arg[idx + 1 ..]
+                            else
+                                args.next() orelse return error.MissingArgument;
+
+                            @field(result.named, @tagName(e)) = try parseFn(next);
+                        } else if (eq) |idx| {
+                            @field(result.named, @tagName(e)) = try parseBool(arg[idx + 1 ..]);
+                        } else {
+                            @field(result.named, @tagName(e)) = !negates;
+                        }
                     } else {
                         const next = if (eq) |idx|
                             arg[idx + 1 ..]
