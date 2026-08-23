@@ -1,0 +1,7 @@
+.{
+    .name = .seiargs,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{""},
+    .fingerprint = 0xbba86fa35c4d7042,
+}
