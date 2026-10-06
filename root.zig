@@ -984,7 +984,7 @@ pub fn getArgStrings(arena: Allocator, argv0: [:0]const u8, args: anytype) ArgSt
 pub fn fromInit(init: *const std.process.Init, Args: type, config: Config(Args)) Args {
     const arena = init.arena.allocator();
     const argv = init.minimal.args.toSlice(arena) catch std.process.fatal("Out of memory", .{});
-    return std.cli.parse(arena, Args, config, argv) catch |err| {
+    return parse(arena, Args, config, argv) catch |err| {
         const exit_code: u8 = switch (err) {
             error.HelpRequested => 0,
             error.IncorrectUsage => 1,
@@ -999,7 +999,7 @@ pub fn fromInit(init: *const std.process.Init, Args: type, config: Config(Args))
         var stderr = init.io.lockStderr(&buf, null) catch |err2| switch (err2) {
             error.Canceled => unreachable,
         };
-        std.cli.printUsage(&stderr.file_writer.interface, Args, config, argv[0]) catch {};
+        printUsage(&stderr.file_writer.interface, Args, config, argv[0]) catch {};
         init.io.unlockStderr();
 
         std.process.exit(exit_code);
@@ -1265,6 +1265,10 @@ test getArgStrings {
     };
 
     try testing.expectEqualDeep(expected_arg_str, arg_str);
+}
+
+test {
+    _ = &fromInit;
 }
 
 const std = @import("std");
