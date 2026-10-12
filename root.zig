@@ -1268,7 +1268,7 @@ test getArgStrings {
 }
 
 test {
-    _ = &fromInit;
+    std.testing.refAllDecls(@This());
 }
 
 const std = @import("std");
