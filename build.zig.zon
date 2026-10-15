@@ -1,7 +1,12 @@
 .{
     .name = .seiargs,
-    .version = "0.0.1",
-    .minimum_zig_version = "0.16.0",
-    .paths = .{""},
+    .version = "1.0.0",
+    .minimum_zig_version = "0.17.0",
+    .paths = .{
+        "LICENSE",
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+    },
     .fingerprint = 0xbba86fa35c4d7042,
 }
